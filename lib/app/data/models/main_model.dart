@@ -1,25 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-enum ShapeType { rectangle, circle, oval, roundedRectangle }
-
-enum Tool { brush, shape }
-
-enum ResizeHandle { none, topLeft, topRight, bottomLeft, bottomRight }
-
-class BlurAction {
-  final int shapeIndex;
-  final double oldBlur;
-  final double newBlur;
-  final CensorShape shape; // Added to store complete shape state
-
-  BlurAction({
-    required this.shapeIndex,
-    required this.oldBlur,
-    required this.newBlur,
-    required this.shape,
-  });
-}
+import '../../modules/home/controllers/home_controller.dart';
 
 class BrushPoint {
   final Offset point;
@@ -66,6 +48,26 @@ class CensorShape {
   }
 }
 
+enum ShapeType {
+  rectangle,
+  circle,
+  oval,
+  roundedRectangle,
+}
+
+enum Tool {
+  brush,
+  shape,
+}
+
+enum ResizeHandle {
+  none,
+  topLeft,
+  topRight,
+  bottomLeft,
+  bottomRight,
+}
+
 class EditorState {
   final RxList<CensorShape> shapes;
   final RxList<List<BrushPoint>> strokes;
@@ -78,8 +80,10 @@ class EditorState {
   final RxBool resizeMode;
   final RxInt selectedIndex;
   final RxBool isDragging;
-  final RxList<BlurAction> undoStack;
-  final RxList<BlurAction> redoStack;
+  final RxList<EditorAction>
+      undoStack; // Changed from BlurAction to EditorAction
+  final RxList<EditorAction>
+      redoStack; // Changed from BlurAction to EditorAction
   final Rx<ResizeHandle> activeHandle;
 
   EditorState()
@@ -94,7 +98,7 @@ class EditorState {
         resizeMode = false.obs,
         selectedIndex = (-1).obs,
         isDragging = false.obs,
-        undoStack = <BlurAction>[].obs,
-        redoStack = <BlurAction>[].obs,
+        undoStack = <EditorAction>[].obs, // Updated type
+        redoStack = <EditorAction>[].obs, // Updated type
         activeHandle = ResizeHandle.none.obs;
 }
