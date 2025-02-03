@@ -1,34 +1,225 @@
+import 'dart:async';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:screenshot/screenshot.dart';
-
+import '../../../data/helper/editor_action_hlper.dart';
 import '../../../data/models/main_model.dart';
 
 class HomeController extends GetxController {
   final state = EditorState();
   final selectedImage = Rx<File?>(null);
   final screenshotController = ScreenshotController();
+  Timer? _brushTimer;
+  List<BrushPoint> _currentStrokeBuffer = [];
+
+  @override
+  void onInit() {
+    super.onInit();
+    // Check if there's a saved image being opened
+    if (Get.arguments != null && Get.arguments is File) {
+      selectedImage.value = Get.arguments as File;
+      clearCanvas();
+    }
+  }
+
+  void addBrushPoint(Offset point, {bool newStroke = false}) {
+    final brushPoint = BrushPoint(
+      point: point,
+      size: state.brushSize.value,
+      blur: state.blur.value,
+    );
+
+    if (newStroke) {
+      _currentStrokeBuffer = [brushPoint];
+      state.strokes.add(_currentStrokeBuffer);
+      state.undoStack.add(BrushAction(
+        points: [brushPoint],
+        strokeIndex: state.strokes.length - 1,
+        isNewStroke: true,
+      ));
+    } else if (state.strokes.isNotEmpty) {
+      _currentStrokeBuffer.add(brushPoint);
+      state.strokes.last.add(brushPoint);
+
+      // Throttle the creation of undo actions for brush strokes
+      _brushTimer?.cancel();
+      _brushTimer = Timer(const Duration(milliseconds: 100), () {
+        if (_currentStrokeBuffer.isNotEmpty) {
+          state.undoStack.add(BrushAction(
+            points: List<BrushPoint>.from(_currentStrokeBuffer),
+            strokeIndex: state.strokes.length - 1,
+          ));
+          _currentStrokeBuffer = [];
+        }
+      });
+    }
+    state.redoStack.clear();
+    update();
+  }
+
+  void addCensorShape(Offset position) {
+    // Deselect all shapes
+    for (final shape in state.shapes) {
+      shape.isSelected.value = false;
+    }
+
+    final shape = CensorShape(
+      type: state.shapeType.value,
+      position: position,
+      size: Size(state.shapeWidth.value, state.shapeHeight.value),
+      blurRadius: state.blur.value,
+      isSelected: true,
+    );
+
+    state.shapes.add(shape);
+    state.selectedIndex.value = state.shapes.length - 1;
+
+    state.undoStack.add(ShapeAction(
+      newShape: shape.copyWith(),
+      type: ActionType.add,
+    ));
+    state.redoStack.clear();
+    update();
+  }
+
+  void selectShape(Offset position) {
+    final oldSelectedIndex = state.selectedIndex.value;
+    CensorShape? oldSelectedShape;
+    if (oldSelectedIndex >= 0 && oldSelectedIndex < state.shapes.length) {
+      oldSelectedShape = state.shapes[oldSelectedIndex].copyWith();
+    }
+
+    state.selectedIndex.value = -1;
+    bool found = false;
+
+    for (var i = state.shapes.length - 1; i >= 0; i--) {
+      final shape = state.shapes[i];
+      final rect = Rect.fromCenter(
+        center: shape.position,
+        width: shape.size.width,
+        height: shape.size.height,
+      );
+
+      if (!found && rect.contains(position)) {
+        state.selectedIndex.value = i;
+        shape.isSelected.value = true;
+        state.shapeWidth.value = shape.size.width;
+        state.shapeHeight.value = shape.size.height;
+        found = true;
+
+        // Add to undo stack if we're changing selection
+        if (oldSelectedIndex != i) {
+          if (oldSelectedShape != null) {
+            state.undoStack.add(ShapeAction(
+              shapeIndex: oldSelectedIndex,
+              oldShape: oldSelectedShape,
+              newShape: state.shapes[oldSelectedIndex].copyWith(),
+              type: ActionType.modify,
+            ));
+          }
+          state.undoStack.add(ShapeAction(
+            shapeIndex: i,
+            oldShape: shape.copyWith(isSelected: false),
+            newShape: shape.copyWith(),
+            type: ActionType.modify,
+          ));
+          state.redoStack.clear();
+        }
+      } else {
+        shape.isSelected.value = false;
+      }
+    }
+    update();
+  }
+
+  void updateShapePosition(int index, Offset delta) {
+    if (index >= 0 && index < state.shapes.length) {
+      final shape = state.shapes[index];
+      final oldShape = shape.copyWith();
+
+      shape.position = Offset(
+        shape.position.dx + delta.dx,
+        shape.position.dy + delta.dy,
+      );
+
+      // Throttle the creation of undo actions for drag operations
+      _brushTimer?.cancel();
+      _brushTimer = Timer(const Duration(milliseconds: 100), () {
+        state.undoStack.add(ShapeAction(
+          shapeIndex: index,
+          oldShape: oldShape,
+          newShape: shape.copyWith(),
+          type: ActionType.modify,
+        ));
+        state.redoStack.clear();
+      });
+
+      update();
+    }
+  }
+
+  void updateShapeSize(Size newSize) {
+    if (state.selectedIndex.value >= 0) {
+      final index = state.selectedIndex.value;
+      final shape = state.shapes[index];
+      final oldShape = shape.copyWith();
+
+      shape.size = newSize;
+      state.shapeWidth.value = newSize.width;
+      state.shapeHeight.value = newSize.height;
+
+      state.undoStack.add(ShapeAction(
+        shapeIndex: index,
+        oldShape: oldShape,
+        newShape: shape.copyWith(),
+        type: ActionType.modify,
+      ));
+      state.redoStack.clear();
+      update();
+    }
+  }
+
   void updateSelectedShapeBlur(double newBlur) {
     if (state.selectedIndex.value >= 0) {
       final index = state.selectedIndex.value;
       final shape = state.shapes[index];
-      final oldBlur = shape.blurRadius.value;
+      final oldShape = shape.copyWith();
 
-      // Create action before modifying the shape
-      state.undoStack.add(BlurAction(
+      shape.blurRadius.value = newBlur;
+
+      // Throttle the creation of undo actions for blur adjustments
+      _brushTimer?.cancel();
+      _brushTimer = Timer(const Duration(milliseconds: 100), () {
+        state.undoStack.add(ShapeAction(
+          shapeIndex: index,
+          oldShape: oldShape,
+          newShape: shape.copyWith(),
+          type: ActionType.modify,
+        ));
+        state.redoStack.clear();
+      });
+
+      update();
+    }
+  }
+
+  void deleteSelectedShape() {
+    if (state.selectedIndex.value >= 0) {
+      final index = state.selectedIndex.value;
+      final oldShape = state.shapes[index].copyWith();
+
+      state.shapes.removeAt(index);
+      state.selectedIndex.value = -1;
+
+      state.undoStack.add(ShapeAction(
         shapeIndex: index,
-        oldBlur: oldBlur,
-        newBlur: newBlur,
-        shape: shape.copyWith(), // Store complete shape state
+        oldShape: oldShape,
+        type: ActionType.delete,
       ));
       state.redoStack.clear();
-
-      // Update the blur value
-      shape.blurRadius.value = newBlur;
       update();
     }
   }
@@ -37,41 +228,76 @@ class HomeController extends GetxController {
     if (state.undoStack.isEmpty) return;
 
     final action = state.undoStack.removeLast();
-    if (action.shapeIndex < state.shapes.length) {
-      final shape = state.shapes[action.shapeIndex];
-
-      // Save current state for redo
-      state.redoStack.add(BlurAction(
-        shapeIndex: action.shapeIndex,
-        oldBlur: shape.blurRadius.value,
-        newBlur: action.oldBlur,
-        shape: shape.copyWith(),
-      ));
-
-      // Restore old blur value
-      shape.blurRadius.value = action.oldBlur;
-      update();
-    }
+    action.undo(state);
+    state.redoStack.add(action);
+    update();
   }
 
   void redo() {
     if (state.redoStack.isEmpty) return;
 
     final action = state.redoStack.removeLast();
-    if (action.shapeIndex < state.shapes.length) {
-      final shape = state.shapes[action.shapeIndex];
+    action.redo(state);
+    state.undoStack.add(action);
+    update();
+  }
 
-      // Save current state for undo
-      state.undoStack.add(BlurAction(
-        shapeIndex: action.shapeIndex,
-        oldBlur: shape.blurRadius.value,
-        newBlur: action.newBlur,
-        shape: shape.copyWith(),
-      ));
+  Future<void> saveImage() async {
+    if (selectedImage.value == null) return;
 
-      // Apply redo blur value
-      shape.blurRadius.value = action.newBlur;
-      update();
+    try {
+      state.tool.value = Tool.brush;
+
+      final selectedIndex = state.selectedIndex.value;
+      final selectedShape =
+          selectedIndex >= 0 ? state.shapes[selectedIndex] : null;
+      final wasSelected = selectedShape?.isSelected.value ?? false;
+
+      // Temporarily hide selection
+      if (selectedShape != null) {
+        selectedShape.isSelected.value = false;
+      }
+
+      // Take screenshot
+      final image = await screenshotController.capture();
+
+      // Restore selection state
+      if (selectedShape != null) {
+        selectedShape.isSelected.value = wasSelected;
+      }
+
+      if (image == null) return;
+
+      // Save the image
+      final directory = await getApplicationDocumentsDirectory();
+      final imagePath =
+          '${directory.path}/blurred_image_${DateTime.now().millisecondsSinceEpoch}.png';
+
+      final file = File(imagePath);
+      await file.writeAsBytes(image);
+
+      // Show success message
+      await Get.snackbar(
+        'Success',
+        'Image saved successfully',
+        snackPosition: SnackPosition.BOTTOM,
+      );
+
+      // Wait a brief moment for the snackbar to be visible
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Return to saved works page and refresh
+      if (Get.previousRoute == '/') {
+        Get.back(result: true); // Pass true to indicate successful save
+      }
+    } catch (e) {
+      Get.snackbar(
+        'Error',
+        'Failed to save image: $e',
+        snackPosition: SnackPosition.BOTTOM,
+      );
+    } finally {
+      update(); // Ensure UI is updated
     }
   }
 
@@ -92,124 +318,14 @@ class HomeController extends GetxController {
     state.resizeMode.value = false;
     state.undoStack.clear();
     state.redoStack.clear();
+    _currentStrokeBuffer.clear();
+    _brushTimer?.cancel();
     update();
   }
 
-  void addBrushPoint(Offset point, {bool newStroke = false}) {
-    final brushPoint = BrushPoint(
-      point: point,
-      size: state.brushSize.value,
-      blur: state.blur.value,
-    );
-
-    if (newStroke) {
-      state.strokes.add([brushPoint]);
-    } else if (state.strokes.isNotEmpty) {
-      state.strokes.last.add(brushPoint);
-    }
-    update();
-  }
-
-  void addCensorShape(Offset position) {
-    // Deselect all shapes
-    for (final shape in state.shapes) {
-      shape.isSelected.value = false;
-    }
-
-    final shape = CensorShape(
-      type: state.shapeType.value,
-      position: position,
-      size: Size(state.shapeWidth.value, state.shapeHeight.value),
-      blurRadius: state.blur.value,
-      isSelected: true,
-    );
-
-    state.shapes.add(shape);
-    state.selectedIndex.value = state.shapes.length - 1;
-    update();
-  }
-
-  void selectShape(Offset position) {
-    state.selectedIndex.value = -1;
-    bool found = false;
-
-    for (var i = state.shapes.length - 1; i >= 0; i--) {
-      final shape = state.shapes[i];
-      final rect = Rect.fromCenter(
-        center: shape.position,
-        width: shape.size.width,
-        height: shape.size.height,
-      );
-
-      if (!found && rect.contains(position)) {
-        state.selectedIndex.value = i;
-        shape.isSelected.value = true;
-
-        // Update shape dimensions in state
-        state.shapeWidth.value = shape.size.width;
-        state.shapeHeight.value = shape.size.height;
-        found = true;
-      } else {
-        shape.isSelected.value = false;
-      }
-    }
-    update();
-  }
-
-  void updateShapePosition(int index, Offset delta) {
-    if (index >= 0 && index < state.shapes.length) {
-      final shape = state.shapes[index];
-      shape.position = Offset(
-        shape.position.dx + delta.dx,
-        shape.position.dy + delta.dy,
-      );
-      update();
-    }
-  }
-
-  void updateShapeSize(Size newSize) {
-    if (state.selectedIndex.value >= 0) {
-      final shape = state.shapes[state.selectedIndex.value];
-      shape.size = newSize;
-      state.shapeWidth.value = newSize.width;
-      state.shapeHeight.value = newSize.height;
-      update();
-    }
-  }
-
-  void deleteSelectedShape() {
-    if (state.selectedIndex.value >= 0) {
-      state.shapes.removeAt(state.selectedIndex.value);
-      state.selectedIndex.value = -1;
-      update();
-    }
-  }
-
-  Future<void> saveImage() async {
-    if (selectedImage.value == null) return;
-
-    try {
-      final image = await screenshotController.capture();
-      if (image == null) return;
-
-      final directory = await getApplicationDocumentsDirectory();
-      final imagePath =
-          '${directory.path}/blurred_image_${DateTime.now().millisecondsSinceEpoch}.png';
-
-      final file = File(imagePath);
-      await file.writeAsBytes(image);
-
-      Get.snackbar(
-        'Success',
-        'Image saved successfully',
-        snackPosition: SnackPosition.BOTTOM,
-      );
-    } catch (e) {
-      Get.snackbar(
-        'Error',
-        'Failed to save image: $e',
-        snackPosition: SnackPosition.BOTTOM,
-      );
-    }
+  @override
+  void onClose() {
+    _brushTimer?.cancel();
+    super.onClose();
   }
 }
