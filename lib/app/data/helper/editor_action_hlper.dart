@@ -35,6 +35,11 @@ class ShapeAction extends EditorAction {
         if (shapeIndex != null && oldShape != null) {
           state.shapes[shapeIndex!] = oldShape!;
           state.selectedIndex.value = shapeIndex!;
+          // Update state dimensions if shape is selected
+          if (oldShape!.isSelected.value) {
+            state.shapeWidth.value = oldShape!.size.width;
+            state.shapeHeight.value = oldShape!.size.height;
+          }
         }
         break;
     }
@@ -59,6 +64,11 @@ class ShapeAction extends EditorAction {
         if (shapeIndex != null && newShape != null) {
           state.shapes[shapeIndex!] = newShape!;
           state.selectedIndex.value = shapeIndex!;
+          // Update state dimensions if shape is selected
+          if (newShape!.isSelected.value) {
+            state.shapeWidth.value = newShape!.size.width;
+            state.shapeHeight.value = newShape!.size.height;
+          }
         }
         break;
     }
@@ -68,23 +78,31 @@ class ShapeAction extends EditorAction {
 class BrushAction extends EditorAction {
   final List<BrushPoint> points;
   final bool isNewStroke;
+  final int strokeIndex;
 
   BrushAction({
     required this.points,
+    required this.strokeIndex,
     this.isNewStroke = false,
   });
 
   @override
   void undo(EditorState state) {
     if (isNewStroke) {
-      state.strokes.removeLast();
-    } else if (state.strokes.isNotEmpty) {
-      final stroke = state.strokes.last;
-      for (var i = 0; i < points.length; i++) {
-        stroke.removeLast();
+      if (strokeIndex < state.strokes.length) {
+        state.strokes.removeAt(strokeIndex);
       }
-      if (stroke.isEmpty) {
-        state.strokes.removeLast();
+    } else {
+      if (strokeIndex < state.strokes.length) {
+        final stroke = state.strokes[strokeIndex];
+        for (var i = 0; i < points.length; i++) {
+          if (stroke.isNotEmpty) {
+            stroke.removeLast();
+          }
+        }
+        if (stroke.isEmpty) {
+          state.strokes.removeAt(strokeIndex);
+        }
       }
     }
   }
@@ -92,11 +110,15 @@ class BrushAction extends EditorAction {
   @override
   void redo(EditorState state) {
     if (isNewStroke) {
-      state.strokes.add(points);
-    } else if (state.strokes.isNotEmpty) {
-      state.strokes.last.addAll(points);
+      if (strokeIndex <= state.strokes.length) {
+        state.strokes.insert(strokeIndex, List<BrushPoint>.from(points));
+      }
     } else {
-      state.strokes.add(points);
+      if (strokeIndex < state.strokes.length) {
+        state.strokes[strokeIndex].addAll(points);
+      } else {
+        state.strokes.add(List<BrushPoint>.from(points));
+      }
     }
   }
 }

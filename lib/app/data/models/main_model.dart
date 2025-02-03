@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../modules/home/controllers/home_controller.dart';
+import '../helper/editor_action_hlper.dart';
 
 class BrushPoint {
   final Offset point;

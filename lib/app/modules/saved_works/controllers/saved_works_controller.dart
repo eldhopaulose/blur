@@ -106,7 +106,13 @@ class SavedWorksController extends GetxController {
     }
   }
 
-  void openImage(File image) {
-    Get.toNamed('/editor', arguments: image);
+  Future<void> openImage(File image) async {
+    // Navigate to editor with the selected image
+    final result = await Get.toNamed('/home', arguments: image);
+
+    // Refresh the list if we got back from a successful save
+    if (result == true) {
+      await loadDefaultDirectory();
+    }
   }
 }

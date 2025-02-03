@@ -5,136 +5,8 @@ import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:screenshot/screenshot.dart';
+import '../../../data/helper/editor_action_hlper.dart';
 import '../../../data/models/main_model.dart';
-
-abstract class EditorAction {
-  void undo(EditorState state);
-  void redo(EditorState state);
-}
-
-class ShapeAction extends EditorAction {
-  final int? shapeIndex;
-  final CensorShape? oldShape;
-  final CensorShape? newShape;
-  final ActionType type;
-
-  ShapeAction({
-    this.shapeIndex,
-    this.oldShape,
-    this.newShape,
-    required this.type,
-  });
-
-  @override
-  void undo(EditorState state) {
-    switch (type) {
-      case ActionType.add:
-        state.shapes.removeLast();
-        state.selectedIndex.value = -1;
-        break;
-      case ActionType.delete:
-        if (oldShape != null) {
-          state.shapes.insert(shapeIndex!, oldShape!);
-          state.selectedIndex.value = shapeIndex!;
-        }
-        break;
-      case ActionType.modify:
-        if (shapeIndex != null && oldShape != null) {
-          state.shapes[shapeIndex!] = oldShape!;
-          state.selectedIndex.value = shapeIndex!;
-          // Update state dimensions if shape is selected
-          if (oldShape!.isSelected.value) {
-            state.shapeWidth.value = oldShape!.size.width;
-            state.shapeHeight.value = oldShape!.size.height;
-          }
-        }
-        break;
-    }
-  }
-
-  @override
-  void redo(EditorState state) {
-    switch (type) {
-      case ActionType.add:
-        if (newShape != null) {
-          state.shapes.add(newShape!);
-          state.selectedIndex.value = state.shapes.length - 1;
-        }
-        break;
-      case ActionType.delete:
-        if (shapeIndex != null) {
-          state.shapes.removeAt(shapeIndex!);
-          state.selectedIndex.value = -1;
-        }
-        break;
-      case ActionType.modify:
-        if (shapeIndex != null && newShape != null) {
-          state.shapes[shapeIndex!] = newShape!;
-          state.selectedIndex.value = shapeIndex!;
-          // Update state dimensions if shape is selected
-          if (newShape!.isSelected.value) {
-            state.shapeWidth.value = newShape!.size.width;
-            state.shapeHeight.value = newShape!.size.height;
-          }
-        }
-        break;
-    }
-  }
-}
-
-class BrushAction extends EditorAction {
-  final List<BrushPoint> points;
-  final bool isNewStroke;
-  final int strokeIndex;
-
-  BrushAction({
-    required this.points,
-    required this.strokeIndex,
-    this.isNewStroke = false,
-  });
-
-  @override
-  void undo(EditorState state) {
-    if (isNewStroke) {
-      if (strokeIndex < state.strokes.length) {
-        state.strokes.removeAt(strokeIndex);
-      }
-    } else {
-      if (strokeIndex < state.strokes.length) {
-        final stroke = state.strokes[strokeIndex];
-        for (var i = 0; i < points.length; i++) {
-          if (stroke.isNotEmpty) {
-            stroke.removeLast();
-          }
-        }
-        if (stroke.isEmpty) {
-          state.strokes.removeAt(strokeIndex);
-        }
-      }
-    }
-  }
-
-  @override
-  void redo(EditorState state) {
-    if (isNewStroke) {
-      if (strokeIndex <= state.strokes.length) {
-        state.strokes.insert(strokeIndex, List<BrushPoint>.from(points));
-      }
-    } else {
-      if (strokeIndex < state.strokes.length) {
-        state.strokes[strokeIndex].addAll(points);
-      } else {
-        state.strokes.add(List<BrushPoint>.from(points));
-      }
-    }
-  }
-}
-
-enum ActionType {
-  add,
-  delete,
-  modify,
-}
 
 class HomeController extends GetxController {
   final state = EditorState();
@@ -142,6 +14,16 @@ class HomeController extends GetxController {
   final screenshotController = ScreenshotController();
   Timer? _brushTimer;
   List<BrushPoint> _currentStrokeBuffer = [];
+
+  @override
+  void onInit() {
+    super.onInit();
+    // Check if there's a saved image being opened
+    if (Get.arguments != null && Get.arguments is File) {
+      selectedImage.value = Get.arguments as File;
+      clearCanvas();
+    }
+  }
 
   void addBrushPoint(Offset point, {bool newStroke = false}) {
     final brushPoint = BrushPoint(
@@ -360,6 +242,43 @@ class HomeController extends GetxController {
     update();
   }
 
+  Future<void> saveImage() async {
+    if (selectedImage.value == null) return;
+
+    try {
+      final image = await screenshotController.capture();
+      if (image == null) return;
+
+      final directory = await getApplicationDocumentsDirectory();
+      final imagePath =
+          '${directory.path}/blurred_image_${DateTime.now().millisecondsSinceEpoch}.png';
+
+      final file = File(imagePath);
+      await file.writeAsBytes(image);
+
+      // Show success message
+      await Get.snackbar(
+        'Success',
+        'Image saved successfully',
+        snackPosition: SnackPosition.BOTTOM,
+      );
+
+      // Wait a brief moment for the snackbar to be visible
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Return to saved works page and refresh
+      if (Get.previousRoute == '/') {
+        Get.back(result: true); // Pass true to indicate successful save
+      }
+    } catch (e) {
+      Get.snackbar(
+        'Error',
+        'Failed to save image: $e',
+        snackPosition: SnackPosition.BOTTOM,
+      );
+    }
+  }
+
   Future<void> pickImage() async {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
@@ -380,34 +299,6 @@ class HomeController extends GetxController {
     _currentStrokeBuffer.clear();
     _brushTimer?.cancel();
     update();
-  }
-
-  Future<void> saveImage() async {
-    if (selectedImage.value == null) return;
-
-    try {
-      final image = await screenshotController.capture();
-      if (image == null) return;
-
-      final directory = await getApplicationDocumentsDirectory();
-      final imagePath =
-          '${directory.path}/blurred_image_${DateTime.now().millisecondsSinceEpoch}.png';
-
-      final file = File(imagePath);
-      await file.writeAsBytes(image);
-
-      Get.snackbar(
-        'Success',
-        'Image saved successfully',
-        snackPosition: SnackPosition.BOTTOM,
-      );
-    } catch (e) {
-      Get.snackbar(
-        'Error',
-        'Failed to save image: $e',
-        snackPosition: SnackPosition.BOTTOM,
-      );
-    }
   }
 
   @override
