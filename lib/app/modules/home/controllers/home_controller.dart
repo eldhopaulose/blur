@@ -246,9 +246,29 @@ class HomeController extends GetxController {
     if (selectedImage.value == null) return;
 
     try {
+      state.tool.value = Tool.brush;
+
+      final selectedIndex = state.selectedIndex.value;
+      final selectedShape =
+          selectedIndex >= 0 ? state.shapes[selectedIndex] : null;
+      final wasSelected = selectedShape?.isSelected.value ?? false;
+
+      // Temporarily hide selection
+      if (selectedShape != null) {
+        selectedShape.isSelected.value = false;
+      }
+
+      // Take screenshot
       final image = await screenshotController.capture();
+
+      // Restore selection state
+      if (selectedShape != null) {
+        selectedShape.isSelected.value = wasSelected;
+      }
+
       if (image == null) return;
 
+      // Save the image
       final directory = await getApplicationDocumentsDirectory();
       final imagePath =
           '${directory.path}/blurred_image_${DateTime.now().millisecondsSinceEpoch}.png';
@@ -276,6 +296,8 @@ class HomeController extends GetxController {
         'Failed to save image: $e',
         snackPosition: SnackPosition.BOTTOM,
       );
+    } finally {
+      update(); // Ensure UI is updated
     }
   }
 
